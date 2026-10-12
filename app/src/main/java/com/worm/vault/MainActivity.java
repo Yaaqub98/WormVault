@@ -3,6 +3,7 @@ package com.worm.vault;
 import android.app.AlertDialog;
 import android.content.DialogInterface;
 import android.content.Intent;
+import android.content.SharedPreferences;
 import android.database.Cursor;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
@@ -22,23 +23,82 @@ import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
 import android.widget.VideoView;
+import androidx.annotation.NonNull;
 import androidx.appcompat.app.AppCompatActivity;
+import androidx.biometric.BiometricManager;
+import androidx.biometric.BiometricPrompt;
+import androidx.core.content.ContextCompat;
 import androidx.core.content.FileProvider;
 import java.io.File;
 import java.io.InputStream;
+import java.util.concurrent.Executor;
 
 public class MainActivity extends AppCompatActivity {
     private static final int PICK_FILE = 1001;
+    private static final String PREFS = "wormvault";
+    private static final String KEY_BIO = "biometric_enabled";
+    private static final String KEY_BIO_PW = "biometric_password";
+
     private VaultManager vault;
     private LinearLayout filesContainer;
     private TextView countView;
     private String currentPassword;
+    private SharedPreferences prefs;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
         vault = new VaultManager(this);
-        showLoginScreen();
+
+        // Try biometric first
+        if (prefs.getBoolean(KEY_BIO, false) && canUseBiometric()) {
+            showBiometricLogin();
+        } else {
+            showLoginScreen();
+        }
+    }
+
+    private boolean canUseBiometric() {
+        BiometricManager bm = BiometricManager.from(this);
+        int result = bm.canAuthenticate(BiometricManager.Authenticators.BIOMETRIC_WEAK);
+        return result == BiometricManager.BIOMETRIC_SUCCESS;
+    }
+
+    private void showBiometricLogin() {
+        Executor ex = ContextCompat.getMainExecutor(this);
+        BiometricPrompt prompt = new BiometricPrompt(this, ex,
+            new BiometricPrompt.AuthenticationCallback() {
+                @Override
+                public void onAuthenticationSucceeded(
+                    @NonNull BiometricPrompt.AuthenticationResult r) {
+                    super.onAuthenticationSucceeded(r);
+                    String pw = prefs.getString(KEY_BIO_PW, "");
+                    if (!pw.isEmpty() && vault.unlock(pw)) {
+                        currentPassword = pw;
+                        showVaultScreen();
+                    } else {
+                        showLoginScreen();
+                    }
+                }
+
+                @Override
+                public void onAuthenticationError(int code, @NonNull CharSequence msg) {
+                    super.onAuthenticationError(code, msg);
+                    showLoginScreen();
+                }
+
+                @Override
+                public void onAuthenticationFailed() {
+                    super.onAuthenticationFailed();
+                }
+            });
+        BiometricPrompt.PromptInfo info = new BiometricPrompt.PromptInfo.Builder()
+            .setTitle("WormVault")
+            .setSubtitle("افتح الخزنة ببصمتك")
+            .setNegativeButtonText("استخدام كلمة السر")
+            .build();
+        prompt.authenticate(info);
     }
 
     private void showLoginScreen() {
@@ -72,12 +132,13 @@ public class MainActivity extends AppCompatActivity {
             @Override
             public void onClick(View v) {
                 String pw = input.getText().toString();
-                if (pw.length() < 4) {
-                    toast("كلمة السر قصيرة جداً");
-                    return;
-                }
+                if (pw.length() < 4) { toast("كلمة السر قصيرة"); return; }
                 if (vault.unlock(pw)) {
                     currentPassword = pw;
+                    // Save password for biometric next time
+                    if (prefs.getBoolean(KEY_BIO, false)) {
+                        prefs.edit().putString(KEY_BIO_PW, pw).apply();
+                    }
                     showVaultScreen();
                 } else {
                     toast("كلمة السر غير صحيحة");
@@ -128,6 +189,17 @@ public class MainActivity extends AppCompatActivity {
         });
         root.addView(changePwBtn);
 
+        Button bioBtn = new Button(this);
+        boolean bioOn = prefs.getBoolean(KEY_BIO, false);
+        bioBtn.setText(bioOn ? "🔐 البصمة: مفعّلة (اضغط للإيقاف)" : "🔐 تفعيل البصمة");
+        bioBtn.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                toggleBiometric();
+            }
+        });
+        root.addView(bioBtn);
+
         Button lockBtn = new Button(this);
         lockBtn.setText("قفل");
         lockBtn.setOnClickListener(new View.OnClickListener() {
@@ -136,6 +208,7 @@ public class MainActivity extends AppCompatActivity {
                 vault.lock();
                 vault.clearTemp();
                 currentPassword = null;
+                prefs.edit().remove(KEY_BIO_PW).apply();
                 showLoginScreen();
             }
         });
@@ -151,6 +224,53 @@ public class MainActivity extends AppCompatActivity {
 
         setContentView(root);
         refreshFiles();
+    }
+
+    private void toggleBiometric() {
+        boolean current = prefs.getBoolean(KEY_BIO, false);
+        if (current) {
+            prefs.edit().putBoolean(KEY_BIO, false)
+                .remove(KEY_BIO_PW).apply();
+            toast("تم إيقاف البصمة");
+            showVaultScreen();
+            return;
+        }
+        if (!canUseBiometric()) {
+            toast("جهازك لا يدعم البصمة أو لم تُسجّل بصمة");
+            return;
+        }
+        // Verify with password before enabling
+        showChangePwDialog_BiometricEnable();
+    }
+
+    private void showChangePwDialog_BiometricEnable() {
+        final EditText pwInput = new EditText(this);
+        pwInput.setHint("أدخل كلمة السر لتفعيل البصمة");
+        pwInput.setInputType(InputType.TYPE_CLASS_TEXT
+            | InputType.TYPE_TEXT_VARIATION_PASSWORD);
+
+        new AlertDialog.Builder(this)
+            .setTitle("تفعيل البصمة")
+            .setView(pwInput)
+            .setPositiveButton("تفعيل", new DialogInterface.OnClickListener() {
+                @Override
+                public void onClick(DialogInterface d, int w) {
+                    String pw = pwInput.getText().toString();
+                    VaultManager test = new VaultManager(MainActivity.this);
+                    if (test.unlock(pw)) {
+                        prefs.edit()
+                            .putBoolean(KEY_BIO, true)
+                            .putString(KEY_BIO_PW, pw)
+                            .apply();
+                        toast("✅ تم تفعيل البصمة");
+                        showVaultScreen();
+                    } else {
+                        toast("كلمة السر خاطئة");
+                    }
+                }
+            })
+            .setNegativeButton("إلغاء", null)
+            .show();
     }
 
     private void showChangePwDialog() {
@@ -189,6 +309,9 @@ public class MainActivity extends AppCompatActivity {
                     if (!n.equals(c)) { toast("كلمتا السر غير متطابقتين"); return; }
                     if (vault.changePassword(o, n)) {
                         currentPassword = n;
+                        if (prefs.getBoolean(KEY_BIO, false)) {
+                            prefs.edit().putString(KEY_BIO_PW, n).apply();
+                        }
                         toast("✅ تم تغيير كلمة السر");
                     } else {
                         toast("❌ كلمة السر الحالية خاطئة");
@@ -258,13 +381,9 @@ public class MainActivity extends AppCompatActivity {
     private void previewFile(String name) {
         try {
             File f = vault.decryptToTemp(name);
-
-            if (isImage(name)) {
-                showImagePreview(f, name);
-            } else if (isVideo(name)) {
-                showVideoPreview(f, name);
-            } else {
-                // Fallback: open externally
+            if (isImage(name)) showImagePreview(f, name);
+            else if (isVideo(name)) showVideoPreview(f, name);
+            else {
                 Uri uri = FileProvider.getUriForFile(this,
                     "com.worm.vault.fileprovider", f);
                 Intent i = new Intent(Intent.ACTION_VIEW);
@@ -303,12 +422,9 @@ public class MainActivity extends AppCompatActivity {
         back.setText("← رجوع");
         back.setOnClickListener(new View.OnClickListener() {
             @Override
-            public void onClick(View v) {
-                showVaultScreen();
-            }
+            public void onClick(View v) { showVaultScreen(); }
         });
         layout.addView(back);
-
         setContentView(layout);
     }
 
@@ -339,12 +455,9 @@ public class MainActivity extends AppCompatActivity {
         back.setText("← رجوع");
         back.setOnClickListener(new View.OnClickListener() {
             @Override
-            public void onClick(View v) {
-                showVaultScreen();
-            }
+            public void onClick(View v) { showVaultScreen(); }
         });
         layout.addView(back);
-
         setContentView(layout);
     }
 
