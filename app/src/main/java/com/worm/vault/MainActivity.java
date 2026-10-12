@@ -7,6 +7,7 @@ import android.os.Bundle;
 import android.provider.OpenableColumns;
 import android.view.Gravity;
 import android.view.View;
+import android.webkit.MimeTypeMap;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.LinearLayout;
@@ -14,6 +15,8 @@ import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
 import androidx.appcompat.app.AppCompatActivity;
+import androidx.core.content.FileProvider;
+import java.io.File;
 import java.io.InputStream;
 
 public class MainActivity extends AppCompatActivity {
@@ -113,6 +116,7 @@ public class MainActivity extends AppCompatActivity {
             @Override
             public void onClick(View v) {
                 vault.lock();
+                vault.clearTemp();
                 showLoginScreen();
             }
         });
@@ -153,15 +157,44 @@ public class MainActivity extends AppCompatActivity {
     private void refreshFiles() {
         String[] names = vault.listFiles();
         filesContainer.removeAllViews();
-        for (String name : names) {
+        for (final String name : names) {
             TextView tv = new TextView(this);
             long kb = vault.fileSize(name) / 1024;
-            tv.setText("🔒 " + name + "\n    " + kb + " KB (مشفّر)");
+            tv.setText("🔒 " + name + "\n    " + kb + " KB (اضغط للعرض)");
             tv.setTextSize(14);
             tv.setPadding(20, 30, 20, 30);
+            tv.setBackgroundColor(0xFF1A1A1A);
+            tv.setOnClickListener(new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    openFile(name);
+                }
+            });
             filesContainer.addView(tv);
         }
         countView.setText(names.length + " ملفات مشفّرة");
+    }
+
+    private void openFile(String name) {
+        try {
+            File f = vault.decryptToTemp(name);
+            Uri uri = FileProvider.getUriForFile(this,
+                "com.worm.vault.fileprovider", f);
+            String mime = getMime(name);
+            Intent i = new Intent(Intent.ACTION_VIEW);
+            i.setDataAndType(uri, mime);
+            i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            startActivity(i);
+        } catch (Exception e) {
+            Toast.makeText(this, "خطأ: " + e.getMessage(), Toast.LENGTH_LONG).show();
+        }
+    }
+
+    private String getMime(String name) {
+        String ext = MimeTypeMap.getFileExtensionFromUrl(name);
+        String mime = MimeTypeMap.getSingleton().getMimeTypeFromExtension(
+            ext == null ? "" : ext.toLowerCase());
+        return mime == null ? "*/*" : mime;
     }
 
     private String getFileName(Uri uri) {

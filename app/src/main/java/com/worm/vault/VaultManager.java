@@ -18,11 +18,14 @@ import javax.crypto.spec.SecretKeySpec;
 
 public class VaultManager {
     private final File dir;
+    private final File tempDir;
     private SecretKey key;
 
     public VaultManager(Context ctx) {
         dir = new File(ctx.getFilesDir(), "vault");
         dir.mkdirs();
+        tempDir = new File(ctx.getCacheDir(), "temp");
+        tempDir.mkdirs();
     }
 
     public boolean unlock(String password) {
@@ -100,6 +103,20 @@ public class VaultManager {
 
     public byte[] readFile(String name) throws Exception {
         return decrypt(readAll(new File(dir, name)));
+    }
+
+    public File decryptToTemp(String name) throws Exception {
+        byte[] data = readFile(name);
+        File out = new File(tempDir, name);
+        writeAll(out, data);
+        return out;
+    }
+
+    public void clearTemp() {
+        File[] files = tempDir.listFiles();
+        if (files != null) {
+            for (File f : files) f.delete();
+        }
     }
 
     public String[] listFiles() {
