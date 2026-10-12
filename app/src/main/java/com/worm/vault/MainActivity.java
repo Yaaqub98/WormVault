@@ -14,19 +14,18 @@ import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
 import androidx.appcompat.app.AppCompatActivity;
-import java.io.File;
-import java.io.FileOutputStream;
 import java.io.InputStream;
 
 public class MainActivity extends AppCompatActivity {
     private static final int PICK_FILE = 1001;
-    private String password = "";
+    private VaultManager vault;
     private LinearLayout filesContainer;
     private TextView countView;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        vault = new VaultManager(this);
         showLoginScreen();
     }
 
@@ -66,8 +65,12 @@ public class MainActivity extends AppCompatActivity {
                         "كلمة السر قصيرة جداً", Toast.LENGTH_SHORT).show();
                     return;
                 }
-                password = pw;
-                showVaultScreen();
+                if (vault.unlock(pw)) {
+                    showVaultScreen();
+                } else {
+                    Toast.makeText(MainActivity.this,
+                        "كلمة السر غير صحيحة", Toast.LENGTH_SHORT).show();
+                }
             }
         });
         layout.addView(loginBtn);
@@ -109,7 +112,7 @@ public class MainActivity extends AppCompatActivity {
         lockBtn.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
-                password = "";
+                vault.lock();
                 showLoginScreen();
             }
         });
@@ -131,47 +134,34 @@ public class MainActivity extends AppCompatActivity {
     protected void onActivityResult(int req, int res, Intent data) {
         super.onActivityResult(req, res, data);
         if (req == PICK_FILE && res == RESULT_OK && data != null) {
-            copyToVault(data.getData());
+            addToVault(data.getData());
             refreshFiles();
         }
     }
 
-    private void copyToVault(Uri uri) {
+    private void addToVault(Uri uri) {
         try {
             String name = getFileName(uri);
-            File dir = new File(getFilesDir(), "vault");
-            dir.mkdirs();
-            File outFile = new File(dir, name);
             InputStream in = getContentResolver().openInputStream(uri);
-            FileOutputStream out = new FileOutputStream(outFile);
-            byte[] buf = new byte[8192];
-            int n;
-            while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
-            in.close();
-            out.close();
-            Toast.makeText(this, "أُضيف: " + name, Toast.LENGTH_SHORT).show();
+            vault.addFile(in, name);
+            Toast.makeText(this, "🔒 مشفّر: " + name, Toast.LENGTH_SHORT).show();
         } catch (Exception e) {
             Toast.makeText(this, "خطأ: " + e.getMessage(), Toast.LENGTH_LONG).show();
         }
     }
 
     private void refreshFiles() {
-        File dir = new File(getFilesDir(), "vault");
-        File[] files = dir.listFiles();
+        String[] names = vault.listFiles();
         filesContainer.removeAllViews();
-        int count = 0;
-        if (files != null) {
-            for (File f : files) {
-                TextView tv = new TextView(this);
-                long kb = f.length() / 1024;
-                tv.setText("📄 " + f.getName() + "\n    " + kb + " KB");
-                tv.setTextSize(14);
-                tv.setPadding(20, 30, 20, 30);
-                filesContainer.addView(tv);
-                count++;
-            }
+        for (String name : names) {
+            TextView tv = new TextView(this);
+            long kb = vault.fileSize(name) / 1024;
+            tv.setText("🔒 " + name + "\n    " + kb + " KB (مشفّر)");
+            tv.setTextSize(14);
+            tv.setPadding(20, 30, 20, 30);
+            filesContainer.addView(tv);
         }
-        countView.setText(count + " ملفات");
+        countView.setText(names.length + " ملفات مشفّرة");
     }
 
     private String getFileName(Uri uri) {
