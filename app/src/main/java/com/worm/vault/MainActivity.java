@@ -46,6 +46,8 @@ public class MainActivity extends AppCompatActivity {
     private static final int PICK_MULTI = 1002;
     private static final int EXPORT_BACKUP = 1003;
     private static final int IMPORT_BACKUP = 1004;
+    private static final int EXPORT_SHARE = 1005;
+    private static final int IMPORT_SHARE = 1006;
     private static final String PREFS = "wormvault";
     private static final String KEY_BIO = "biometric_enabled";
     private static final String KEY_BIO_PW = "biometric_password";
@@ -281,6 +283,13 @@ public class MainActivity extends AppCompatActivity {
         row3.addView(importBtn);
         root.addView(row3);
 
+        Button importShareBtn = new Button(this);
+        importShareBtn.setText("استيراد ملف مشترك");
+        importShareBtn.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) { startImportShare(); }
+        });
+        root.addView(importShareBtn);
+
         Button lockBtn = new Button(this);
         lockBtn.setText("قفل");
         lockBtn.setOnClickListener(new View.OnClickListener() {
@@ -447,6 +456,11 @@ public class MainActivity extends AppCompatActivity {
             doExportBackup(data.getData(), backupPw == null ? "" : backupPw);
         } else if (req == IMPORT_BACKUP) {
             askImportPassword(data.getData());
+        } else if (req == EXPORT_SHARE) {
+            String tempPw = data.getStringExtra("share_pw");
+            doExportShare(data.getData(), tempPw == null ? "" : tempPw);
+        } else if (req == IMPORT_SHARE) {
+            askImportSharePassword(data.getData());
         }
     }
 
@@ -509,6 +523,14 @@ public class MainActivity extends AppCompatActivity {
                 @Override public void onClick(View v) { shareFile(name); }
             });
             actions.addView(shareBtn);
+
+            Button shareSecBtn = new Button(this);
+            shareSecBtn.setText("مشاركة مشفرة");
+            shareSecBtn.setLayoutParams(ap);
+            shareSecBtn.setOnClickListener(new View.OnClickListener() {
+                @Override public void onClick(View v) { exportSecureShare(name); }
+            });
+            actions.addView(shareSecBtn);
 
             Button renameBtn = new Button(this);
             renameBtn.setText("إعادة");
@@ -769,5 +791,91 @@ public class MainActivity extends AppCompatActivity {
         if (result == null) result = uri.getLastPathSegment();
         if (result == null) result = "file_" + System.currentTimeMillis();
         return result;
+    }
+
+    // ===== SECURE SHARE EXPORT =====
+    private String pendingShareName = null;
+
+    private void exportSecureShare(final String name) {
+        final EditText pw = new EditText(this);
+        pw.setHint("كلمة سر مؤقتة للمشاركة");
+        pw.setInputType(InputType.TYPE_CLASS_TEXT
+            | InputType.TYPE_TEXT_VARIATION_PASSWORD);
+        new AlertDialog.Builder(this)
+            .setTitle("مشاركة آمنة")
+            .setMessage("أدخل كلمة سر مؤقتة. أرسلها للمستقبل بطريقة منفصلة.")
+            .setView(pw)
+            .setPositiveButton("التالي", new DialogInterface.OnClickListener() {
+                @Override public void onClick(DialogInterface d, int w) {
+                    String tempPw = pw.getText().toString();
+                    if (tempPw.length() < 4) { toast("كلمة السر قصيرة"); return; }
+                    pendingShareName = name;
+                    String outName = name.replaceAll("\\.[^.]+$", "") + ".wvshare";
+                    Intent i = new Intent(Intent.ACTION_CREATE_DOCUMENT);
+                    i.addCategory(Intent.CATEGORY_OPENABLE);
+                    i.setType("application/octet-stream");
+                    i.putExtra(Intent.EXTRA_TITLE, outName);
+                    i.putExtra("share_pw", tempPw);
+                    startActivityForResult(i, EXPORT_SHARE);
+                }
+            })
+            .setNegativeButton("إلغاء", null)
+            .show();
+    }
+
+    private void doExportShare(Uri dest, String tempPw) {
+        if (pendingShareName == null) return;
+        try {
+            byte[] data = vault.exportShare(pendingShareName, tempPw);
+            if (data == null) { toast("فشل التصدير"); return; }
+            OutputStream out = getContentResolver().openOutputStream(dest);
+            out.write(data);
+            out.close();
+            toast("تم إنشاء الملف المشترك");
+        } catch (Exception e) { toast("خطأ: " + e.getMessage()); }
+        pendingShareName = null;
+    }
+
+    // ===== SECURE SHARE IMPORT =====
+    private void startImportShare() {
+        Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+        i.addCategory(Intent.CATEGORY_OPENABLE);
+        i.setType("*/*");
+        startActivityForResult(i, IMPORT_SHARE);
+    }
+
+    private void askImportSharePassword(final Uri uri) {
+        final EditText pw = new EditText(this);
+        pw.setHint("كلمة سر المشاركة");
+        pw.setInputType(InputType.TYPE_CLASS_TEXT
+            | InputType.TYPE_TEXT_VARIATION_PASSWORD);
+        new AlertDialog.Builder(this)
+            .setTitle("كلمة سر الملف المشترك")
+            .setView(pw)
+            .setPositiveButton("استيراد", new DialogInterface.OnClickListener() {
+                @Override public void onClick(DialogInterface d, int w) {
+                    doImportShare(uri, pw.getText().toString());
+                }
+            })
+            .setNegativeButton("إلغاء", null)
+            .show();
+    }
+
+    private void doImportShare(Uri src, String tempPw) {
+        try {
+            InputStream in = getContentResolver().openInputStream(src);
+            java.io.ByteArrayOutputStream buf = new java.io.ByteArrayOutputStream();
+            byte[] tmp = new byte[8192];
+            int n;
+            while ((n = in.read(tmp)) > 0) buf.write(tmp, 0, n);
+            in.close();
+            String savedName = vault.importShare(buf.toByteArray(), tempPw);
+            if (savedName != null) {
+                toast("تم استيراد: " + savedName);
+                refreshFiles();
+            } else {
+                toast("فشل — كلمة سر خاطئة أو ملف تالف");
+            }
+        } catch (Exception e) { toast("خطأ: " + e.getMessage()); }
     }
 }

@@ -252,4 +252,82 @@ public class VaultManager {
         out.write(data);
         out.close();
     }
+
+    // ===== SHARE EXPORT =====
+    // Creates a .wvshare file encrypted with a temporary password
+    public byte[] exportShare(String name, String tempPassword) {
+        try {
+            byte[] original = readFile(name);
+            byte[] salt = new byte[16];
+            new SecureRandom().nextBytes(salt);
+            SecretKey sKey = deriveKey(tempPassword, salt);
+            byte[] iv = new byte[12];
+            new SecureRandom().nextBytes(iv);
+            Cipher c = Cipher.getInstance("AES/GCM/NoPadding");
+            c.init(Cipher.ENCRYPT_MODE, sKey, new GCMParameterSpec(128, iv));
+            byte[] ct = c.doFinal(original);
+
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            out.write(new byte[]{0x57, 0x56, 0x53, 0x48}); // "WVSH"
+            out.write(0x01); // version
+            // Filename length (2 bytes) + filename
+            byte[] nameBytes = name.getBytes("UTF-8");
+            out.write((nameBytes.length >> 8) & 0xFF);
+            out.write(nameBytes.length & 0xFF);
+            out.write(nameBytes);
+            out.write(salt);
+            out.write(iv);
+            out.write(ct);
+            return out.toByteArray();
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    // ===== SHARE IMPORT =====
+    public String importShare(byte[] shareData, String tempPassword) {
+        try {
+            if (shareData.length < 4 + 1 + 2 + 16 + 12) return null;
+            if (shareData[0] != 0x57 || shareData[1] != 0x56
+                || shareData[2] != 0x53 || shareData[3] != 0x48) return null;
+            if (shareData[4] != 0x01) return null;
+
+            int offset = 5;
+            int nameLen = ((shareData[offset] & 0xFF) << 8) | (shareData[offset + 1] & 0xFF);
+            offset += 2;
+            if (offset + nameLen > shareData.length) return null;
+            String originalName = new String(shareData, offset, nameLen, "UTF-8");
+            offset += nameLen;
+
+            byte[] salt = new byte[16];
+            byte[] iv = new byte[12];
+            byte[] ct = new byte[shareData.length - offset - 28];
+            System.arraycopy(shareData, offset, salt, 0, 16);
+            System.arraycopy(shareData, offset + 16, iv, 0, 12);
+            System.arraycopy(shareData, offset + 28, ct, 0, ct.length);
+
+            SecretKey sKey = deriveKey(tempPassword, salt);
+            Cipher c = Cipher.getInstance("AES/GCM/NoPadding");
+            c.init(Cipher.DECRYPT_MODE, sKey, new GCMParameterSpec(128, iv));
+            byte[] original = c.doFinal(ct);
+
+            // Add to vault with unique name if exists
+            String saveName = originalName;
+            int suffix = 1;
+            while (new File(dir, saveName).exists()) {
+                int dot = originalName.lastIndexOf('.');
+                if (dot > 0) {
+                    saveName = originalName.substring(0, dot) + "_" + suffix
+                        + originalName.substring(dot);
+                } else {
+                    saveName = originalName + "_" + suffix;
+                }
+                suffix++;
+            }
+            writeAll(new File(dir, saveName), encrypt(original));
+            return saveName;
+        } catch (Exception e) {
+            return null;
+        }
+    }
 }
