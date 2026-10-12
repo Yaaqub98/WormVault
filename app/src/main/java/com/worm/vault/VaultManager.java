@@ -30,20 +30,8 @@ public class VaultManager {
 
     public boolean unlock(String password) {
         try {
-            File saltFile = new File(dir, ".salt");
-            byte[] salt;
-            if (saltFile.exists()) {
-                salt = readAll(saltFile);
-            } else {
-                salt = new byte[16];
-                new SecureRandom().nextBytes(salt);
-                writeAll(saltFile, salt);
-            }
-            PBEKeySpec spec = new PBEKeySpec(password.toCharArray(), salt, 10000, 256);
-            SecretKeyFactory f = SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256");
-            byte[] kb = f.generateSecret(spec).getEncoded();
-            key = new SecretKeySpec(kb, "AES");
-
+            byte[] salt = getOrCreateSalt();
+            key = deriveKey(password, salt);
             File checkFile = new File(dir, ".check");
             if (checkFile.exists()) {
                 try {
@@ -62,12 +50,61 @@ public class VaultManager {
         }
     }
 
+    public boolean changePassword(String oldPw, String newPw) {
+        // Verify old password
+        if (!unlock(oldPw)) return false;
+        try {
+            // List all encrypted files
+            String[] names = listFiles();
+            // Decrypt all files with old key
+            List<byte[]> decrypted = new ArrayList<>();
+            for (String name : names) {
+                decrypted.add(readFile(name));
+            }
+            // Generate new salt + key
+            byte[] newSalt = new byte[16];
+            new SecureRandom().nextBytes(newSalt);
+            SecretKey newKey = deriveKey(newPw, newSalt);
+            // Re-encrypt all files with new key
+            SecretKey oldKey = key;
+            key = newKey;
+            for (int i = 0; i < names.length; i++) {
+                writeAll(new File(dir, names[i]), encrypt(decrypted.get(i)));
+            }
+            // Update salt file
+            writeAll(new File(dir, ".salt"), newSalt);
+            // Update check file
+            writeAll(new File(dir, ".check"), encrypt("WORMVAULT_OK".getBytes("UTF-8")));
+            return true;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
     public void lock() {
         key = null;
     }
 
     public boolean isUnlocked() {
         return key != null;
+    }
+
+    private byte[] getOrCreateSalt() throws Exception {
+        File saltFile = new File(dir, ".salt");
+        if (saltFile.exists()) {
+            return readAll(saltFile);
+        }
+        byte[] salt = new byte[16];
+        new SecureRandom().nextBytes(salt);
+        writeAll(saltFile, salt);
+        return salt;
+    }
+
+    private static SecretKey deriveKey(String pw, byte[] salt) throws Exception {
+        PBEKeySpec spec = new PBEKeySpec(pw.toCharArray(), salt, 10000, 256);
+        SecretKeyFactory f = SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256");
+        byte[] kb = f.generateSecret(spec).getEncoded();
+        return new SecretKeySpec(kb, "AES");
     }
 
     public byte[] encrypt(byte[] plain) throws Exception {
@@ -114,9 +151,7 @@ public class VaultManager {
 
     public void clearTemp() {
         File[] files = tempDir.listFiles();
-        if (files != null) {
-            for (File f : files) f.delete();
-        }
+        if (files != null) for (File f : files) f.delete();
     }
 
     public String[] listFiles() {

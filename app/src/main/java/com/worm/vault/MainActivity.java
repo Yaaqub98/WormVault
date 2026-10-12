@@ -1,10 +1,13 @@
 package com.worm.vault;
 
+import android.app.AlertDialog;
+import android.content.DialogInterface;
 import android.content.Intent;
 import android.database.Cursor;
 import android.net.Uri;
 import android.os.Bundle;
 import android.provider.OpenableColumns;
+import android.text.InputType;
 import android.view.Gravity;
 import android.view.View;
 import android.webkit.MimeTypeMap;
@@ -53,8 +56,8 @@ public class MainActivity extends AppCompatActivity {
 
         final EditText input = new EditText(this);
         input.setHint("كلمة السر");
-        input.setInputType(android.text.InputType.TYPE_CLASS_TEXT
-            | android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD);
+        input.setInputType(InputType.TYPE_CLASS_TEXT
+            | InputType.TYPE_TEXT_VARIATION_PASSWORD);
         layout.addView(input);
 
         Button loginBtn = new Button(this);
@@ -110,6 +113,16 @@ public class MainActivity extends AppCompatActivity {
         });
         root.addView(addBtn);
 
+        Button changePwBtn = new Button(this);
+        changePwBtn.setText("تغيير كلمة السر");
+        changePwBtn.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                showChangePwDialog();
+            }
+        });
+        root.addView(changePwBtn);
+
         Button lockBtn = new Button(this);
         lockBtn.setText("قفل");
         lockBtn.setOnClickListener(new View.OnClickListener() {
@@ -134,6 +147,61 @@ public class MainActivity extends AppCompatActivity {
         refreshFiles();
     }
 
+    private void showChangePwDialog() {
+        LinearLayout layout = new LinearLayout(this);
+        layout.setOrientation(LinearLayout.VERTICAL);
+        layout.setPadding(40, 20, 40, 20);
+
+        final EditText oldPw = new EditText(this);
+        oldPw.setHint("كلمة السر الحالية");
+        oldPw.setInputType(InputType.TYPE_CLASS_TEXT
+            | InputType.TYPE_TEXT_VARIATION_PASSWORD);
+        layout.addView(oldPw);
+
+        final EditText newPw = new EditText(this);
+        newPw.setHint("كلمة السر الجديدة");
+        newPw.setInputType(InputType.TYPE_CLASS_TEXT
+            | InputType.TYPE_TEXT_VARIATION_PASSWORD);
+        layout.addView(newPw);
+
+        final EditText confirmPw = new EditText(this);
+        confirmPw.setHint("تأكيد كلمة السر الجديدة");
+        confirmPw.setInputType(InputType.TYPE_CLASS_TEXT
+            | InputType.TYPE_TEXT_VARIATION_PASSWORD);
+        layout.addView(confirmPw);
+
+        new AlertDialog.Builder(this)
+            .setTitle("تغيير كلمة السر")
+            .setView(layout)
+            .setPositiveButton("تغيير", new DialogInterface.OnClickListener() {
+                @Override
+                public void onClick(DialogInterface d, int w) {
+                    String o = oldPw.getText().toString();
+                    String n = newPw.getText().toString();
+                    String c = confirmPw.getText().toString();
+                    if (n.length() < 4) {
+                        toast("كلمة السر الجديدة قصيرة");
+                        return;
+                    }
+                    if (!n.equals(c)) {
+                        toast("كلمتا السر غير متطابقتين");
+                        return;
+                    }
+                    if (vault.changePassword(o, n)) {
+                        toast("✅ تم تغيير كلمة السر");
+                    } else {
+                        toast("❌ كلمة السر الحالية خاطئة");
+                    }
+                }
+            })
+            .setNegativeButton("إلغاء", null)
+            .show();
+    }
+
+    private void toast(String s) {
+        Toast.makeText(this, s, Toast.LENGTH_LONG).show();
+    }
+
     @Override
     protected void onActivityResult(int req, int res, Intent data) {
         super.onActivityResult(req, res, data);
@@ -148,9 +216,9 @@ public class MainActivity extends AppCompatActivity {
             String name = getFileName(uri);
             InputStream in = getContentResolver().openInputStream(uri);
             vault.addFile(in, name);
-            Toast.makeText(this, "🔒 مشفّر: " + name, Toast.LENGTH_SHORT).show();
+            toast("🔒 مشفّر: " + name);
         } catch (Exception e) {
-            Toast.makeText(this, "خطأ: " + e.getMessage(), Toast.LENGTH_LONG).show();
+            toast("خطأ: " + e.getMessage());
         }
     }
 
@@ -186,7 +254,7 @@ public class MainActivity extends AppCompatActivity {
             i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
             startActivity(i);
         } catch (Exception e) {
-            Toast.makeText(this, "خطأ: " + e.getMessage(), Toast.LENGTH_LONG).show();
+            toast("خطأ: " + e.getMessage());
         }
     }
 
