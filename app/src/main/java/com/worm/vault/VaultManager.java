@@ -54,25 +54,20 @@ public class VaultManager {
             String[] names = listFiles();
             List<byte[]> decrypted = new ArrayList<>();
             for (String name : names) decrypted.add(readFile(name));
-
             byte[] newSalt = new byte[16];
             new SecureRandom().nextBytes(newSalt);
             SecretKey newKey = deriveKey(newPw, newSalt);
-
             key = newKey;
-            for (int i = 0; i < names.length; i++) {
+            for (int i = 0; i < names.length; i++)
                 writeAll(new File(dir, names[i]), encrypt(decrypted.get(i)));
-            }
             writeAll(new File(dir, ".salt"), newSalt);
             writeAll(new File(dir, ".check"), encrypt("WORMVAULT_OK".getBytes("UTF-8")));
             return true;
         } catch (Exception e) { return false; }
     }
 
-    // ==== BACKUP EXPORT ====
     public boolean exportBackup(OutputStream out, String backupPassword) {
         try {
-            // 1. Build ZIP of vault dir
             ByteArrayOutputStream zipBuf = new ByteArrayOutputStream();
             ZipOutputStream zos = new ZipOutputStream(zipBuf);
             File[] files = dir.listFiles();
@@ -89,41 +84,32 @@ public class VaultManager {
             zos.close();
             byte[] zipData = zipBuf.toByteArray();
 
-            // 2. Encrypt ZIP with backup password
             byte[] salt = new byte[16];
             new SecureRandom().nextBytes(salt);
             SecretKey bKey = deriveKey(backupPassword, salt);
-
             byte[] iv = new byte[12];
             new SecureRandom().nextBytes(iv);
             Cipher c = Cipher.getInstance("AES/GCM/NoPadding");
             c.init(Cipher.ENCRYPT_MODE, bKey, new GCMParameterSpec(128, iv));
             byte[] ct = c.doFinal(zipData);
 
-            // 3. Write: [salt 16][iv 12][ct...]
             out.write(salt);
             out.write(iv);
             out.write(ct);
             out.flush();
             return true;
-        } catch (Exception e) {
-            return false;
-        }
+        } catch (Exception e) { return false; }
     }
 
-    // ==== BACKUP IMPORT ====
     public boolean importBackup(InputStream in, String backupPassword) {
         try {
-            // 1. Read whole input
             ByteArrayOutputStream all = new ByteArrayOutputStream();
             byte[] buf = new byte[8192];
             int n;
             while ((n = in.read(buf)) > 0) all.write(buf, 0, n);
             byte[] data = all.toByteArray();
+            if (data.length < 28) return false;
 
-            if (data.length < 28) return false; // 16 + 12
-
-            // 2. Extract salt, iv, ct
             byte[] salt = new byte[16];
             byte[] iv = new byte[12];
             byte[] ct = new byte[data.length - 28];
@@ -131,13 +117,11 @@ public class VaultManager {
             System.arraycopy(data, 16, iv, 0, 12);
             System.arraycopy(data, 28, ct, 0, ct.length);
 
-            // 3. Decrypt
             SecretKey bKey = deriveKey(backupPassword, salt);
             Cipher c = Cipher.getInstance("AES/GCM/NoPadding");
             c.init(Cipher.DECRYPT_MODE, bKey, new GCMParameterSpec(128, iv));
             byte[] zipData = c.doFinal(ct);
 
-            // 4. Extract ZIP
             ZipInputStream zis = new ZipInputStream(new ByteArrayInputStream(zipData));
             ZipEntry e;
             List<File> extracted = new ArrayList<>();
@@ -154,20 +138,13 @@ public class VaultManager {
             }
             zis.close();
 
-            // 5. Delete current vault, move extracted
             File[] oldFiles = dir.listFiles();
             if (oldFiles != null) for (File f : oldFiles) f.delete();
-            for (File f : extracted) {
-                File dest = new File(dir, f.getName());
-                f.renameTo(dest);
-            }
+            for (File f : extracted) f.renameTo(new File(dir, f.getName()));
 
-            // 6. Lock vault (need new password to unlock)
             key = null;
             return true;
-        } catch (Exception e) {
-            return false;
-        }
+        } catch (Exception e) { return false; }
     }
 
     public void lock() { key = null; }
@@ -251,9 +228,7 @@ public class VaultManager {
         return f.exists() ? f.length() : 0;
     }
 
-    public void deleteFile(String name) {
-        new File(dir, name).delete();
-    }
+    public void deleteFile(String name) { new File(dir, name).delete(); }
 
     public boolean renameFile(String oldName, String newName) {
         File oldF = new File(dir, oldName);
