@@ -10,9 +10,12 @@ import android.graphics.BitmapFactory;
 import android.net.Uri;
 import android.os.Bundle;
 import android.provider.OpenableColumns;
+import android.text.Editable;
 import android.text.InputType;
+import android.text.TextWatcher;
 import android.view.Gravity;
 import android.view.View;
+import android.view.WindowManager;
 import android.webkit.MimeTypeMap;
 import android.widget.Button;
 import android.widget.EditText;
@@ -31,10 +34,13 @@ import androidx.core.content.ContextCompat;
 import androidx.core.content.FileProvider;
 import java.io.File;
 import java.io.InputStream;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.Executor;
 
 public class MainActivity extends AppCompatActivity {
     private static final int PICK_FILE = 1001;
+    private static final int PICK_MULTI = 1002;
     private static final String PREFS = "wormvault";
     private static final String KEY_BIO = "biometric_enabled";
     private static final String KEY_BIO_PW = "biometric_password";
@@ -44,14 +50,19 @@ public class MainActivity extends AppCompatActivity {
     private TextView countView;
     private String currentPassword;
     private SharedPreferences prefs;
+    private String searchQuery = "";
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        // Block screenshots — Privacy protection
+        getWindow().setFlags(
+            WindowManager.LayoutParams.FLAG_SECURE,
+            WindowManager.LayoutParams.FLAG_SECURE
+        );
         prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
         vault = new VaultManager(this);
 
-        // Try biometric first
         if (prefs.getBoolean(KEY_BIO, false) && canUseBiometric()) {
             showBiometricLogin();
         } else {
@@ -61,8 +72,8 @@ public class MainActivity extends AppCompatActivity {
 
     private boolean canUseBiometric() {
         BiometricManager bm = BiometricManager.from(this);
-        int result = bm.canAuthenticate(BiometricManager.Authenticators.BIOMETRIC_WEAK);
-        return result == BiometricManager.BIOMETRIC_SUCCESS;
+        return bm.canAuthenticate(BiometricManager.Authenticators.BIOMETRIC_WEAK)
+            == BiometricManager.BIOMETRIC_SUCCESS;
     }
 
     private void showBiometricLogin() {
@@ -72,25 +83,15 @@ public class MainActivity extends AppCompatActivity {
                 @Override
                 public void onAuthenticationSucceeded(
                     @NonNull BiometricPrompt.AuthenticationResult r) {
-                    super.onAuthenticationSucceeded(r);
                     String pw = prefs.getString(KEY_BIO_PW, "");
                     if (!pw.isEmpty() && vault.unlock(pw)) {
                         currentPassword = pw;
                         showVaultScreen();
-                    } else {
-                        showLoginScreen();
-                    }
+                    } else showLoginScreen();
                 }
-
                 @Override
-                public void onAuthenticationError(int code, @NonNull CharSequence msg) {
-                    super.onAuthenticationError(code, msg);
+                public void onAuthenticationError(int c, @NonNull CharSequence m) {
                     showLoginScreen();
-                }
-
-                @Override
-                public void onAuthenticationFailed() {
-                    super.onAuthenticationFailed();
                 }
             });
         BiometricPrompt.PromptInfo info = new BiometricPrompt.PromptInfo.Builder()
@@ -135,14 +136,11 @@ public class MainActivity extends AppCompatActivity {
                 if (pw.length() < 4) { toast("كلمة السر قصيرة"); return; }
                 if (vault.unlock(pw)) {
                     currentPassword = pw;
-                    // Save password for biometric next time
                     if (prefs.getBoolean(KEY_BIO, false)) {
                         prefs.edit().putString(KEY_BIO_PW, pw).apply();
                     }
                     showVaultScreen();
-                } else {
-                    toast("كلمة السر غير صحيحة");
-                }
+                } else toast("كلمة السر غير صحيحة");
             }
         });
         layout.addView(loginBtn);
@@ -152,63 +150,88 @@ public class MainActivity extends AppCompatActivity {
     private void showVaultScreen() {
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
-        root.setPadding(40, 80, 40, 40);
+        root.setPadding(40, 60, 40, 40);
 
         TextView title = new TextView(this);
         title.setText("الخزنة مفتوحة");
-        title.setTextSize(28);
+        title.setTextSize(24);
         title.setGravity(Gravity.CENTER);
         root.addView(title);
 
         countView = new TextView(this);
-        countView.setTextSize(16);
+        countView.setTextSize(14);
         countView.setGravity(Gravity.CENTER);
-        countView.setPadding(0, 20, 0, 20);
+        countView.setPadding(0, 10, 0, 10);
         root.addView(countView);
+
+        // Search field
+        final EditText search = new EditText(this);
+        search.setHint("🔍 بحث...");
+        search.setSingleLine(true);
+        search.setText(searchQuery);
+        search.addTextChangedListener(new TextWatcher() {
+            @Override public void beforeTextChanged(CharSequence s, int a, int b, int c) {}
+            @Override public void onTextChanged(CharSequence s, int a, int b, int c) {}
+            @Override public void afterTextChanged(Editable s) {
+                searchQuery = s.toString();
+                refreshFiles();
+            }
+        });
+        root.addView(search);
+
+        // Row of buttons
+        LinearLayout row1 = new LinearLayout(this);
+        row1.setOrientation(LinearLayout.HORIZONTAL);
 
         Button addBtn = new Button(this);
         addBtn.setText("+ إضافة ملف");
+        LinearLayout.LayoutParams lp1 = new LinearLayout.LayoutParams(0,
+            LinearLayout.LayoutParams.WRAP_CONTENT, 1f);
+        addBtn.setLayoutParams(lp1);
         addBtn.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT);
-                i.addCategory(Intent.CATEGORY_OPENABLE);
-                i.setType("*/*");
-                startActivityForResult(i, PICK_FILE);
-            }
+            @Override public void onClick(View v) { pickSingleFile(); }
         });
-        root.addView(addBtn);
+        row1.addView(addBtn);
+
+        Button addMultiBtn = new Button(this);
+        addMultiBtn.setText("+ متعددة");
+        addMultiBtn.setLayoutParams(lp1);
+        addMultiBtn.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) { pickMultipleFiles(); }
+        });
+        row1.addView(addMultiBtn);
+        root.addView(row1);
+
+        LinearLayout row2 = new LinearLayout(this);
+        row2.setOrientation(LinearLayout.HORIZONTAL);
 
         Button changePwBtn = new Button(this);
-        changePwBtn.setText("تغيير كلمة السر");
+        changePwBtn.setText("كلمة السر");
+        changePwBtn.setLayoutParams(lp1);
         changePwBtn.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                showChangePwDialog();
-            }
+            @Override public void onClick(View v) { showChangePwDialog(); }
         });
-        root.addView(changePwBtn);
+        row2.addView(changePwBtn);
 
         Button bioBtn = new Button(this);
         boolean bioOn = prefs.getBoolean(KEY_BIO, false);
-        bioBtn.setText(bioOn ? "🔐 البصمة: مفعّلة (اضغط للإيقاف)" : "🔐 تفعيل البصمة");
+        bioBtn.setText(bioOn ? "🔐 البصمة ✓" : "🔐 البصمة");
+        bioBtn.setLayoutParams(lp1);
         bioBtn.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                toggleBiometric();
-            }
+            @Override public void onClick(View v) { toggleBiometric(); }
         });
-        root.addView(bioBtn);
+        row2.addView(bioBtn);
+        root.addView(row2);
 
         Button lockBtn = new Button(this);
-        lockBtn.setText("قفل");
+        lockBtn.setText("🔒 قفل");
         lockBtn.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
+            @Override public void onClick(View v) {
                 vault.lock();
                 vault.clearTemp();
                 currentPassword = null;
                 prefs.edit().remove(KEY_BIO_PW).apply();
+                searchQuery = "";
                 showLoginScreen();
             }
         });
@@ -217,13 +240,191 @@ public class MainActivity extends AppCompatActivity {
         ScrollView scroll = new ScrollView(this);
         filesContainer = new LinearLayout(this);
         filesContainer.setOrientation(LinearLayout.VERTICAL);
-        filesContainer.setPadding(0, 30, 0, 0);
+        filesContainer.setPadding(0, 20, 0, 0);
         scroll.addView(filesContainer);
         root.addView(scroll, new LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f));
 
         setContentView(root);
         refreshFiles();
+    }
+
+    private void pickSingleFile() {
+        Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+        i.addCategory(Intent.CATEGORY_OPENABLE);
+        i.setType("*/*");
+        startActivityForResult(i, PICK_FILE);
+    }
+
+    private void pickMultipleFiles() {
+        Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+        i.addCategory(Intent.CATEGORY_OPENABLE);
+        i.setType("*/*");
+        i.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);
+        startActivityForResult(i, PICK_MULTI);
+    }
+
+    @Override
+    protected void onActivityResult(int req, int res, Intent data) {
+        super.onActivityResult(req, res, data);
+        if (res != RESULT_OK || data == null) return;
+
+        if (req == PICK_FILE) {
+            addToVault(data.getData());
+            refreshFiles();
+        } else if (req == PICK_MULTI) {
+            List<Uri> uris = new ArrayList<>();
+            if (data.getClipData() != null) {
+                int n = data.getClipData().getItemCount();
+                for (int i = 0; i < n; i++)
+                    uris.add(data.getClipData().getItemAt(i).getUri());
+            } else if (data.getData() != null) {
+                uris.add(data.getData());
+            }
+            int count = 0;
+            for (Uri u : uris) {
+                if (addToVault(u)) count++;
+            }
+            toast("🔒 شُفّر " + count + " ملف");
+            refreshFiles();
+        }
+    }
+
+    private boolean addToVault(Uri uri) {
+        try {
+            String name = getFileName(uri);
+            InputStream in = getContentResolver().openInputStream(uri);
+            vault.addFile(in, name);
+            return true;
+        } catch (Exception e) {
+            toast("خطأ: " + e.getMessage());
+            return false;
+        }
+    }
+
+    private void refreshFiles() {
+        String[] allNames = vault.listFiles();
+        List<String> filtered = new ArrayList<>();
+        String q = searchQuery.toLowerCase().trim();
+        for (String n : allNames) {
+            if (q.isEmpty() || n.toLowerCase().contains(q))
+                filtered.add(n);
+        }
+
+        filesContainer.removeAllViews();
+        for (final String name : filtered) {
+            final LinearLayout card = new LinearLayout(this);
+            card.setOrientation(LinearLayout.VERTICAL);
+            card.setPadding(20, 20, 20, 20);
+            card.setBackgroundColor(0xFF1A1A1A);
+            LinearLayout.LayoutParams clp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT);
+            clp.setMargins(0, 0, 0, 15);
+            card.setLayoutParams(clp);
+
+            TextView tv = new TextView(this);
+            long kb = vault.fileSize(name) / 1024;
+            String icon = isImage(name) ? "🖼️" : isVideo(name) ? "🎬" : "📄";
+            tv.setText(icon + " " + name + "\n    " + kb + " KB");
+            tv.setTextSize(14);
+            tv.setTextColor(0xFFEEEEEE);
+            card.addView(tv);
+
+            LinearLayout actions = new LinearLayout(this);
+            actions.setOrientation(LinearLayout.HORIZONTAL);
+
+            Button openBtn = new Button(this);
+            openBtn.setText("فتح");
+            LinearLayout.LayoutParams ap = new LinearLayout.LayoutParams(0,
+                LinearLayout.LayoutParams.WRAP_CONTENT, 1f);
+            openBtn.setLayoutParams(ap);
+            openBtn.setOnClickListener(new View.OnClickListener() {
+                @Override public void onClick(View v) { previewFile(name); }
+            });
+            actions.addView(openBtn);
+
+            Button shareBtn = new Button(this);
+            shareBtn.setText("مشاركة");
+            shareBtn.setLayoutParams(ap);
+            shareBtn.setOnClickListener(new View.OnClickListener() {
+                @Override public void onClick(View v) { shareFile(name); }
+            });
+            actions.addView(shareBtn);
+
+            Button renameBtn = new Button(this);
+            renameBtn.setText("إعادة");
+            renameBtn.setLayoutParams(ap);
+            renameBtn.setOnClickListener(new View.OnClickListener() {
+                @Override public void onClick(View v) { renameFileDialog(name); }
+            });
+            actions.addView(renameBtn);
+
+            Button delBtn = new Button(this);
+            delBtn.setText("حذف");
+            delBtn.setLayoutParams(ap);
+            delBtn.setOnClickListener(new View.OnClickListener() {
+                @Override public void onClick(View v) { deleteFileDialog(name); }
+            });
+            actions.addView(delBtn);
+
+            card.addView(actions);
+            filesContainer.addView(card);
+        }
+
+        countView.setText(filtered.size() + " / " + allNames.length + " ملف");
+    }
+
+    private void shareFile(String name) {
+        try {
+            File f = vault.decryptToTemp(name);
+            Uri uri = FileProvider.getUriForFile(this,
+                "com.worm.vault.fileprovider", f);
+            Intent i = new Intent(Intent.ACTION_SEND);
+            i.setType(getMime(name));
+            i.putExtra(Intent.EXTRA_STREAM, uri);
+            i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            startActivity(Intent.createChooser(i, "مشاركة " + name));
+        } catch (Exception e) {
+            toast("خطأ: " + e.getMessage());
+        }
+    }
+
+    private void renameFileDialog(final String oldName) {
+        final EditText input = new EditText(this);
+        input.setText(oldName);
+        input.setSelection(oldName.length());
+
+        new AlertDialog.Builder(this)
+            .setTitle("إعادة تسمية")
+            .setView(input)
+            .setPositiveButton("حفظ", new DialogInterface.OnClickListener() {
+                @Override public void onClick(DialogInterface d, int w) {
+                    String newName = input.getText().toString().trim();
+                    if (newName.isEmpty() || newName.equals(oldName)) return;
+                    if (vault.renameFile(oldName, newName)) {
+                        toast("✅ تم");
+                        refreshFiles();
+                    } else toast("❌ فشل");
+                }
+            })
+            .setNegativeButton("إلغاء", null)
+            .show();
+    }
+
+    private void deleteFileDialog(final String name) {
+        new AlertDialog.Builder(this)
+            .setTitle("حذف")
+            .setMessage("حذف " + name + "؟ لا يمكن التراجع.")
+            .setPositiveButton("حذف", new DialogInterface.OnClickListener() {
+                @Override public void onClick(DialogInterface d, int w) {
+                    vault.deleteFile(name);
+                    toast("🗑️ حُذف");
+                    refreshFiles();
+                }
+            })
+            .setNegativeButton("إلغاء", null)
+            .show();
     }
 
     private void toggleBiometric() {
@@ -236,16 +437,11 @@ public class MainActivity extends AppCompatActivity {
             return;
         }
         if (!canUseBiometric()) {
-            toast("جهازك لا يدعم البصمة أو لم تُسجّل بصمة");
+            toast("جهازك لا يدعم البصمة");
             return;
         }
-        // Verify with password before enabling
-        showChangePwDialog_BiometricEnable();
-    }
-
-    private void showChangePwDialog_BiometricEnable() {
         final EditText pwInput = new EditText(this);
-        pwInput.setHint("أدخل كلمة السر لتفعيل البصمة");
+        pwInput.setHint("أدخل كلمة السر");
         pwInput.setInputType(InputType.TYPE_CLASS_TEXT
             | InputType.TYPE_TEXT_VARIATION_PASSWORD);
 
@@ -253,8 +449,7 @@ public class MainActivity extends AppCompatActivity {
             .setTitle("تفعيل البصمة")
             .setView(pwInput)
             .setPositiveButton("تفعيل", new DialogInterface.OnClickListener() {
-                @Override
-                public void onClick(DialogInterface d, int w) {
+                @Override public void onClick(DialogInterface d, int w) {
                     String pw = pwInput.getText().toString();
                     VaultManager test = new VaultManager(MainActivity.this);
                     if (test.unlock(pw)) {
@@ -262,11 +457,9 @@ public class MainActivity extends AppCompatActivity {
                             .putBoolean(KEY_BIO, true)
                             .putString(KEY_BIO_PW, pw)
                             .apply();
-                        toast("✅ تم تفعيل البصمة");
+                        toast("✅ تم");
                         showVaultScreen();
-                    } else {
-                        toast("كلمة السر خاطئة");
-                    }
+                    } else toast("كلمة السر خاطئة");
                 }
             })
             .setNegativeButton("إلغاء", null)
@@ -291,7 +484,7 @@ public class MainActivity extends AppCompatActivity {
         layout.addView(newPw);
 
         final EditText confirmPw = new EditText(this);
-        confirmPw.setHint("تأكيد كلمة السر الجديدة");
+        confirmPw.setHint("تأكيد الجديدة");
         confirmPw.setInputType(InputType.TYPE_CLASS_TEXT
             | InputType.TYPE_TEXT_VARIATION_PASSWORD);
         layout.addView(confirmPw);
@@ -300,22 +493,18 @@ public class MainActivity extends AppCompatActivity {
             .setTitle("تغيير كلمة السر")
             .setView(layout)
             .setPositiveButton("تغيير", new DialogInterface.OnClickListener() {
-                @Override
-                public void onClick(DialogInterface d, int w) {
+                @Override public void onClick(DialogInterface d, int w) {
                     String o = oldPw.getText().toString();
                     String n = newPw.getText().toString();
                     String c = confirmPw.getText().toString();
                     if (n.length() < 4) { toast("كلمة السر الجديدة قصيرة"); return; }
-                    if (!n.equals(c)) { toast("كلمتا السر غير متطابقتين"); return; }
+                    if (!n.equals(c)) { toast("غير متطابقتين"); return; }
                     if (vault.changePassword(o, n)) {
                         currentPassword = n;
-                        if (prefs.getBoolean(KEY_BIO, false)) {
+                        if (prefs.getBoolean(KEY_BIO, false))
                             prefs.edit().putString(KEY_BIO_PW, n).apply();
-                        }
-                        toast("✅ تم تغيير كلمة السر");
-                    } else {
-                        toast("❌ كلمة السر الحالية خاطئة");
-                    }
+                        toast("✅ تم");
+                    } else toast("❌ خاطئة");
                 }
             })
             .setNegativeButton("إلغاء", null)
@@ -324,48 +513,6 @@ public class MainActivity extends AppCompatActivity {
 
     private void toast(String s) {
         Toast.makeText(this, s, Toast.LENGTH_LONG).show();
-    }
-
-    @Override
-    protected void onActivityResult(int req, int res, Intent data) {
-        super.onActivityResult(req, res, data);
-        if (req == PICK_FILE && res == RESULT_OK && data != null) {
-            addToVault(data.getData());
-            refreshFiles();
-        }
-    }
-
-    private void addToVault(Uri uri) {
-        try {
-            String name = getFileName(uri);
-            InputStream in = getContentResolver().openInputStream(uri);
-            vault.addFile(in, name);
-            toast("🔒 مشفّر: " + name);
-        } catch (Exception e) {
-            toast("خطأ: " + e.getMessage());
-        }
-    }
-
-    private void refreshFiles() {
-        String[] names = vault.listFiles();
-        filesContainer.removeAllViews();
-        for (final String name : names) {
-            TextView tv = new TextView(this);
-            long kb = vault.fileSize(name) / 1024;
-            String icon = isImage(name) ? "🖼️" : isVideo(name) ? "🎬" : "📄";
-            tv.setText(icon + " " + name + "\n    " + kb + " KB");
-            tv.setTextSize(14);
-            tv.setPadding(20, 30, 20, 30);
-            tv.setBackgroundColor(0xFF1A1A1A);
-            tv.setOnClickListener(new View.OnClickListener() {
-                @Override
-                public void onClick(View v) {
-                    previewFile(name);
-                }
-            });
-            filesContainer.addView(tv);
-        }
-        countView.setText(names.length + " ملفات مشفّرة");
     }
 
     private boolean isImage(String name) {
@@ -421,8 +568,7 @@ public class MainActivity extends AppCompatActivity {
         Button back = new Button(this);
         back.setText("← رجوع");
         back.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View v) { showVaultScreen(); }
+            @Override public void onClick(View v) { showVaultScreen(); }
         });
         layout.addView(back);
         setContentView(layout);
@@ -454,8 +600,7 @@ public class MainActivity extends AppCompatActivity {
         Button back = new Button(this);
         back.setText("← رجوع");
         back.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View v) { showVaultScreen(); }
+            @Override public void onClick(View v) { showVaultScreen(); }
         });
         layout.addView(back);
         setContentView(layout);

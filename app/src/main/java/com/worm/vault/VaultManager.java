@@ -34,66 +34,42 @@ public class VaultManager {
             key = deriveKey(password, salt);
             File checkFile = new File(dir, ".check");
             if (checkFile.exists()) {
-                try {
-                    decrypt(readAll(checkFile));
-                    return true;
-                } catch (Exception e) {
-                    key = null;
-                    return false;
-                }
+                try { decrypt(readAll(checkFile)); return true; }
+                catch (Exception e) { key = null; return false; }
             } else {
                 writeAll(checkFile, encrypt("WORMVAULT_OK".getBytes("UTF-8")));
                 return true;
             }
-        } catch (Exception e) {
-            return false;
-        }
+        } catch (Exception e) { return false; }
     }
 
     public boolean changePassword(String oldPw, String newPw) {
-        // Verify old password
         if (!unlock(oldPw)) return false;
         try {
-            // List all encrypted files
             String[] names = listFiles();
-            // Decrypt all files with old key
             List<byte[]> decrypted = new ArrayList<>();
-            for (String name : names) {
-                decrypted.add(readFile(name));
-            }
-            // Generate new salt + key
+            for (String name : names) decrypted.add(readFile(name));
+
             byte[] newSalt = new byte[16];
             new SecureRandom().nextBytes(newSalt);
             SecretKey newKey = deriveKey(newPw, newSalt);
-            // Re-encrypt all files with new key
-            SecretKey oldKey = key;
+
             key = newKey;
             for (int i = 0; i < names.length; i++) {
                 writeAll(new File(dir, names[i]), encrypt(decrypted.get(i)));
             }
-            // Update salt file
             writeAll(new File(dir, ".salt"), newSalt);
-            // Update check file
             writeAll(new File(dir, ".check"), encrypt("WORMVAULT_OK".getBytes("UTF-8")));
             return true;
-        } catch (Exception e) {
-            return false;
-        }
+        } catch (Exception e) { return false; }
     }
 
-    public void lock() {
-        key = null;
-    }
-
-    public boolean isUnlocked() {
-        return key != null;
-    }
+    public void lock() { key = null; }
+    public boolean isUnlocked() { return key != null; }
 
     private byte[] getOrCreateSalt() throws Exception {
         File saltFile = new File(dir, ".salt");
-        if (saltFile.exists()) {
-            return readAll(saltFile);
-        }
+        if (saltFile.exists()) return readAll(saltFile);
         byte[] salt = new byte[16];
         new SecureRandom().nextBytes(salt);
         writeAll(saltFile, salt);
@@ -171,6 +147,13 @@ public class VaultManager {
 
     public void deleteFile(String name) {
         new File(dir, name).delete();
+    }
+
+    public boolean renameFile(String oldName, String newName) {
+        File oldF = new File(dir, oldName);
+        File newF = new File(dir, newName);
+        if (!oldF.exists() || newF.exists()) return false;
+        return oldF.renameTo(newF);
     }
 
     private static byte[] readAll(File f) throws Exception {
