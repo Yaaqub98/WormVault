@@ -4,6 +4,8 @@ import android.app.AlertDialog;
 import android.content.DialogInterface;
 import android.content.Intent;
 import android.database.Cursor;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
 import android.net.Uri;
 import android.os.Bundle;
 import android.provider.OpenableColumns;
@@ -13,10 +15,13 @@ import android.view.View;
 import android.webkit.MimeTypeMap;
 import android.widget.Button;
 import android.widget.EditText;
+import android.widget.ImageView;
 import android.widget.LinearLayout;
+import android.widget.MediaController;
 import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
+import android.widget.VideoView;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.content.FileProvider;
 import java.io.File;
@@ -27,6 +32,7 @@ public class MainActivity extends AppCompatActivity {
     private VaultManager vault;
     private LinearLayout filesContainer;
     private TextView countView;
+    private String currentPassword;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -67,15 +73,14 @@ public class MainActivity extends AppCompatActivity {
             public void onClick(View v) {
                 String pw = input.getText().toString();
                 if (pw.length() < 4) {
-                    Toast.makeText(MainActivity.this,
-                        "كلمة السر قصيرة جداً", Toast.LENGTH_SHORT).show();
+                    toast("كلمة السر قصيرة جداً");
                     return;
                 }
                 if (vault.unlock(pw)) {
+                    currentPassword = pw;
                     showVaultScreen();
                 } else {
-                    Toast.makeText(MainActivity.this,
-                        "كلمة السر غير صحيحة", Toast.LENGTH_SHORT).show();
+                    toast("كلمة السر غير صحيحة");
                 }
             }
         });
@@ -130,6 +135,7 @@ public class MainActivity extends AppCompatActivity {
             public void onClick(View v) {
                 vault.lock();
                 vault.clearTemp();
+                currentPassword = null;
                 showLoginScreen();
             }
         });
@@ -179,15 +185,10 @@ public class MainActivity extends AppCompatActivity {
                     String o = oldPw.getText().toString();
                     String n = newPw.getText().toString();
                     String c = confirmPw.getText().toString();
-                    if (n.length() < 4) {
-                        toast("كلمة السر الجديدة قصيرة");
-                        return;
-                    }
-                    if (!n.equals(c)) {
-                        toast("كلمتا السر غير متطابقتين");
-                        return;
-                    }
+                    if (n.length() < 4) { toast("كلمة السر الجديدة قصيرة"); return; }
+                    if (!n.equals(c)) { toast("كلمتا السر غير متطابقتين"); return; }
                     if (vault.changePassword(o, n)) {
+                        currentPassword = n;
                         toast("✅ تم تغيير كلمة السر");
                     } else {
                         toast("❌ كلمة السر الحالية خاطئة");
@@ -228,14 +229,15 @@ public class MainActivity extends AppCompatActivity {
         for (final String name : names) {
             TextView tv = new TextView(this);
             long kb = vault.fileSize(name) / 1024;
-            tv.setText("🔒 " + name + "\n    " + kb + " KB (اضغط للعرض)");
+            String icon = isImage(name) ? "🖼️" : isVideo(name) ? "🎬" : "📄";
+            tv.setText(icon + " " + name + "\n    " + kb + " KB");
             tv.setTextSize(14);
             tv.setPadding(20, 30, 20, 30);
             tv.setBackgroundColor(0xFF1A1A1A);
             tv.setOnClickListener(new View.OnClickListener() {
                 @Override
                 public void onClick(View v) {
-                    openFile(name);
+                    previewFile(name);
                 }
             });
             filesContainer.addView(tv);
@@ -243,19 +245,107 @@ public class MainActivity extends AppCompatActivity {
         countView.setText(names.length + " ملفات مشفّرة");
     }
 
-    private void openFile(String name) {
+    private boolean isImage(String name) {
+        String m = getMime(name);
+        return m != null && m.startsWith("image/");
+    }
+
+    private boolean isVideo(String name) {
+        String m = getMime(name);
+        return m != null && m.startsWith("video/");
+    }
+
+    private void previewFile(String name) {
         try {
             File f = vault.decryptToTemp(name);
-            Uri uri = FileProvider.getUriForFile(this,
-                "com.worm.vault.fileprovider", f);
-            String mime = getMime(name);
-            Intent i = new Intent(Intent.ACTION_VIEW);
-            i.setDataAndType(uri, mime);
-            i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
-            startActivity(i);
+
+            if (isImage(name)) {
+                showImagePreview(f, name);
+            } else if (isVideo(name)) {
+                showVideoPreview(f, name);
+            } else {
+                // Fallback: open externally
+                Uri uri = FileProvider.getUriForFile(this,
+                    "com.worm.vault.fileprovider", f);
+                Intent i = new Intent(Intent.ACTION_VIEW);
+                i.setDataAndType(uri, getMime(name));
+                i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                startActivity(i);
+            }
         } catch (Exception e) {
             toast("خطأ: " + e.getMessage());
         }
+    }
+
+    private void showImagePreview(File f, String name) {
+        LinearLayout layout = new LinearLayout(this);
+        layout.setOrientation(LinearLayout.VERTICAL);
+        layout.setBackgroundColor(0xFF000000);
+        layout.setPadding(20, 40, 20, 20);
+
+        TextView title = new TextView(this);
+        title.setText(name);
+        title.setTextColor(0xFFFFFFFF);
+        title.setTextSize(16);
+        title.setGravity(Gravity.CENTER);
+        title.setPadding(0, 0, 0, 20);
+        layout.addView(title);
+
+        ImageView iv = new ImageView(this);
+        Bitmap bmp = BitmapFactory.decodeFile(f.getAbsolutePath());
+        if (bmp != null) iv.setImageBitmap(bmp);
+        iv.setAdjustViewBounds(true);
+        iv.setScaleType(ImageView.ScaleType.FIT_CENTER);
+        layout.addView(iv, new LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f));
+
+        Button back = new Button(this);
+        back.setText("← رجوع");
+        back.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                showVaultScreen();
+            }
+        });
+        layout.addView(back);
+
+        setContentView(layout);
+    }
+
+    private void showVideoPreview(File f, String name) {
+        LinearLayout layout = new LinearLayout(this);
+        layout.setOrientation(LinearLayout.VERTICAL);
+        layout.setBackgroundColor(0xFF000000);
+        layout.setPadding(20, 40, 20, 20);
+
+        TextView title = new TextView(this);
+        title.setText(name);
+        title.setTextColor(0xFFFFFFFF);
+        title.setTextSize(16);
+        title.setGravity(Gravity.CENTER);
+        title.setPadding(0, 0, 0, 20);
+        layout.addView(title);
+
+        VideoView vv = new VideoView(this);
+        vv.setVideoPath(f.getAbsolutePath());
+        MediaController mc = new MediaController(this);
+        mc.setAnchorView(vv);
+        vv.setMediaController(mc);
+        layout.addView(vv, new LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f));
+        vv.start();
+
+        Button back = new Button(this);
+        back.setText("← رجوع");
+        back.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                showVaultScreen();
+            }
+        });
+        layout.addView(back);
+
+        setContentView(layout);
     }
 
     private String getMime(String name) {
