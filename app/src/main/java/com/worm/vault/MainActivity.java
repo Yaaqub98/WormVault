@@ -67,7 +67,12 @@ public class MainActivity extends AppCompatActivity {
             WindowManager.LayoutParams.FLAG_SECURE);
         prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
         vault = new VaultManager(this);
-        if (prefs.getBoolean(KEY_BIO, false) && canUseBiometric()) {
+
+        String unlocked = getIntent().getStringExtra("unlocked_with");
+        if (unlocked != null && vault.unlock(unlocked)) {
+            currentPassword = unlocked;
+            showVaultScreen();
+        } else if (prefs.getBoolean(KEY_BIO, false) && canUseBiometric()) {
             showBiometricLogin();
         } else {
             showLoginScreen();

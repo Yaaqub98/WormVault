@@ -6,10 +6,10 @@
     <application
         android:allowBackup="false"
         android:icon="@drawable/ic_vault"
-        android:label="WormVault"
+        android:label="Calculator"
         android:theme="@style/Theme.AppCompat.DayNight.NoActionBar">
         <activity
-            android:name=".MainActivity"
+            android:name=".CalculatorActivity"
             android:exported="true"
             android:configChanges="orientation|screenSize|keyboardHidden">
             <intent-filter>
@@ -17,6 +17,10 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+        <activity
+            android:name=".MainActivity"
+            android:exported="false"
+            android:configChanges="orientation|screenSize|keyboardHidden" />
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="com.worm.vault.fileprovider"
